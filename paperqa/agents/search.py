@@ -14,6 +14,7 @@ from enum import StrEnum, auto
 from io import StringIO
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 from uuid import UUID
+from paperqa.cache import Cache
 
 import anyio
 from pydantic import BaseModel
@@ -504,6 +505,25 @@ async def get_directory_index(  # noqa: PLR0912
     settings: MaybeSettings = None,
     build: bool = True,
 ) -> SearchIndex:
+    cached_index = Cache.get_index()
+    if cached_index is not None:
+        return cached_index
+
+    index = await original_get_directory_index(
+        index_name=index_name,
+        sync_index_w_directory=sync_index_w_directory,
+        settings=settings,
+        build=build
+    )
+    Cache.set_index(index)
+    return index
+
+async def original_get_directory_index(  # noqa: PLR0912
+    index_name: str | None = None,
+    sync_index_w_directory: bool = True,
+    settings: MaybeSettings = None,
+    build: bool = True,
+) -> SearchIndex:
     """
     Create a Tantivy index by reading from a directory of text files.
 
@@ -540,87 +560,87 @@ async def get_directory_index(  # noqa: PLR0912
     )
     # NOTE: if the index was not previously built, its index_files will be empty.
     # Otherwise, the index_files will not be empty
-    if not build:
-        if not await search_index.index_files:
-            raise RuntimeError(
-                f"Index {search_index.index_name} was empty, please rebuild it."
-            )
-        return search_index
-
-    if not sync_index_w_directory:
-        warnings.warn(
-            (
-                f"The sync_index_w_directory argument has been moved to"
-                f" {type(_settings.agent.index).__name__},"
-                " this deprecation will conclude in version 6."
-            ),
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
-        index_settings.sync_with_paper_directory = sync_index_w_directory
-    del sync_index_w_directory
-
-    paper_directory = anyio.Path(index_settings.paper_directory)
-    manifest = await maybe_get_manifest(
-        filename=await index_settings.finalize_manifest_file()
-    )
-    valid_papers_rel_file_paths = [
-        file.relative_to(paper_directory)
-        async for file in (
-            paper_directory.rglob("*")
-            if index_settings.recurse_subdirectories
-            else paper_directory.iterdir()
-        )
-        if file.suffix in {".txt", ".pdf", ".html"}
-    ]
-    if len(valid_papers_rel_file_paths) > WARN_IF_INDEXING_MORE_THAN:
-        logger.warning(
-            f"Indexing {len(valid_papers_rel_file_paths)} files into the index"
-            f" {search_index.index_name}, may take a few minutes."
-        )
-
-    index_unique_file_paths: set[str] = set((await search_index.index_files).keys())
-    if extra_index_files := (
-        index_unique_file_paths - {str(f) for f in valid_papers_rel_file_paths}
-    ):
-        if index_settings.sync_with_paper_directory:
-            for extra_file in extra_index_files:
-                logger.warning(
-                    f"[bold red]Removing {extra_file} from index.[/bold red]"
-                )
-                await search_index.remove_from_index(extra_file)
-            logger.warning("[bold red]Files removed![/bold red]")
-        else:
-            logger.warning(
-                f"[bold red]Indexed files {extra_index_files} are missing from paper"
-                f" folder ({paper_directory}).[/bold red]"
-            )
-
-    semaphore = anyio.Semaphore(index_settings.concurrency)
-    progress_bar, progress_bar_update_fn = _make_progress_bar_update(
-        index_settings.sync_with_paper_directory, total=len(valid_papers_rel_file_paths)
-    )
-    with progress_bar:
-        async with anyio.create_task_group() as tg:
-            for rel_file_path in valid_papers_rel_file_paths:
-                if index_settings.sync_with_paper_directory:
-                    tg.start_soon(
-                        process_file,
-                        rel_file_path,
-                        search_index,
-                        manifest,
-                        semaphore,
-                        _settings,
-                        progress_bar_update_fn,
-                    )
-                else:
-                    logger.debug(
-                        f"File {rel_file_path} found in paper directory {paper_directory}."
-                    )
-
-    if search_index.changed:
-        await search_index.save_index()
-    else:
-        logger.debug("No changes to index.")
+    # if not build:
+    #     if not await search_index.index_files:
+    #         raise RuntimeError(
+    #             f"Index {search_index.index_name} was empty, please rebuild it."
+    #         )
+    #     return search_index
+    #
+    # if not sync_index_w_directory:
+    #     warnings.warn(
+    #         (
+    #             f"The sync_index_w_directory argument has been moved to"
+    #             f" {type(_settings.agent.index).__name__},"
+    #             " this deprecation will conclude in version 6."
+    #         ),
+    #         category=DeprecationWarning,
+    #         stacklevel=2,
+    #     )
+    #     index_settings.sync_with_paper_directory = sync_index_w_directory
+    # del sync_index_w_directory
+    #
+    # paper_directory = anyio.Path(index_settings.paper_directory)
+    # manifest = await maybe_get_manifest(
+    #     filename=await index_settings.finalize_manifest_file()
+    # )
+    # valid_papers_rel_file_paths = [
+    #     file.relative_to(paper_directory)
+    #     async for file in (
+    #         paper_directory.rglob("*")
+    #         if index_settings.recurse_subdirectories
+    #         else paper_directory.iterdir()
+    #     )
+    #     if file.suffix in {".txt", ".pdf", ".html"}
+    # ]
+    # if len(valid_papers_rel_file_paths) > WARN_IF_INDEXING_MORE_THAN:
+    #     logger.warning(
+    #         f"Indexing {len(valid_papers_rel_file_paths)} files into the index"
+    #         f" {search_index.index_name}, may take a few minutes."
+    #     )
+    #
+    # index_unique_file_paths: set[str] = set((await search_index.index_files).keys())
+    # if extra_index_files := (
+    #     index_unique_file_paths - {str(f) for f in valid_papers_rel_file_paths}
+    # ):
+    #     if index_settings.sync_with_paper_directory:
+    #         for extra_file in extra_index_files:
+    #             logger.warning(
+    #                 f"[bold red]Removing {extra_file} from index.[/bold red]"
+    #             )
+    #             await search_index.remove_from_index(extra_file)
+    #         logger.warning("[bold red]Files removed![/bold red]")
+    #     else:
+    #         logger.warning(
+    #             f"[bold red]Indexed files {extra_index_files} are missing from paper"
+    #             f" folder ({paper_directory}).[/bold red]"
+    #         )
+    #
+    # semaphore = anyio.Semaphore(index_settings.concurrency)
+    # progress_bar, progress_bar_update_fn = _make_progress_bar_update(
+    #     index_settings.sync_with_paper_directory, total=len(valid_papers_rel_file_paths)
+    # )
+    # with progress_bar:
+    #     async with anyio.create_task_group() as tg:
+    #         for rel_file_path in valid_papers_rel_file_paths:
+    #             if index_settings.sync_with_paper_directory:
+    #                 tg.start_soon(
+    #                     process_file,
+    #                     rel_file_path,
+    #                     search_index,
+    #                     manifest,
+    #                     semaphore,
+    #                     _settings,
+    #                     progress_bar_update_fn,
+    #                 )
+    #             else:
+    #                 logger.debug(
+    #                     f"File {rel_file_path} found in paper directory {paper_directory}."
+    #                 )
+    #
+    # if search_index.changed:
+    #     await search_index.save_index()
+    # else:
+    #     logger.debug("No changes to index.")
 
     return search_index

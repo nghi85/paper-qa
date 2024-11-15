@@ -39,13 +39,20 @@ def llm_parse_json(text: str) -> dict:
         ) from e
 
 
+def try_parse_int(value, default=5):
+    try:
+        return int(float(value))  # Convert to float first to handle "5.0" strings
+    except (ValueError, TypeError):
+        return default
+
+
 async def map_fxn_summary(
-    text: Text,
-    question: str,
-    prompt_runner: PromptRunner | None,
-    extra_prompt_data: dict[str, str] | None = None,
-    parser: Callable[[str], dict[str, Any]] | None = None,
-    callbacks: list[Callable[[str], None]] | None = None,
+        text: Text,
+        question: str,
+        prompt_runner: PromptRunner | None,
+        extra_prompt_data: dict[str, str] | None = None,
+        parser: Callable[[str], dict[str, Any]] | None = None,
+        callbacks: list[Callable[[str], None]] | None = None,
 ) -> tuple[Context, LLMResult]:
     """Parses the given text and returns a context object with the parser and prompt runner.
 
@@ -89,6 +96,7 @@ async def map_fxn_summary(
                     if "relevance_score" in result_data
                     else extract_score(context)
                 )
+                score = try_parse_int(score, default=5)
                 # just in case question was present
                 result_data.pop("question", None)
                 extras = result_data
@@ -97,14 +105,14 @@ async def map_fxn_summary(
     else:
         context = text.text
         # If we don't assign scores, just default to 5.
-        # why 5? Because we filter out 0s in another place
-        # and 5/10 is the other default I could come up with
         score = 5
         success = True
+
     # remove citations that collide with our grounded citations (for the answer LLM)
     context = strip_citations(context)
     if not success:
         score = extract_score(context)
+        score = try_parse_int(score, default=5)
 
     return (
         Context(
@@ -114,7 +122,7 @@ async def map_fxn_summary(
                 name=text.name,
                 doc=text.doc.__class__(**text.doc.model_dump(exclude={"embedding"})),
             ),
-            score=score,  # pylint: disable=possibly-used-before-assignment
+            score=score,
             **extras,
         ),
         llm_result,

@@ -24,6 +24,7 @@ from paperqa.llms import (  # noqa: E402
 from paperqa.settings import Settings, get_settings  # noqa: E402
 from paperqa.types import Context, Doc, DocDetails, Text  # noqa: E402
 from paperqa.version import __version__  # noqa: E402
+from paperqa.cache import Cache
 
 __all__ = [
     "Answer",
@@ -48,4 +49,5 @@ __all__ = [
     "embedding_model_factory",
     "get_settings",
     "print_callback",
+    "Cache"
 ]
